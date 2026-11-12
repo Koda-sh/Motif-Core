@@ -1,12 +1,10 @@
+import { Fingerprint } from "../fingerprint/fingerprint.js";
 import type {
-  Fingerprint,
   FingerprintRecord,
   HashOptions,
-  Token,
-  Unigram,
-  Varigram,
 } from "../types.js";
 import {
+  createShingles,
   createTokens,
   unigramsFromTokens,
   varigramsFromTokens,
@@ -42,9 +40,44 @@ function assertValidString(value: unknown, paramName = "text"): asserts value is
   }
 }
 
-/**
- * Generate a FingerprintRecord (versioned MinHash fingerprint with creation timestamp) from text.
- */
+// Generate an on-the-fly feature stream (tokens, unigrams, varigrams, shingles) from text
+// without constructing large concatenated arrays in memory.
+export function* streamFeatures(
+  text: string,
+  options: HashOptions = {},
+): Generator<string> {
+  const normalize = options.normalize ?? defaultHashOptions.normalize;
+  const varigramSize = options.varigramSize ?? defaultHashOptions.varigramSize;
+
+  const tokens = createTokens(text, normalize, options.stopWords);
+
+  // Yield filtered word tokens
+  for (let i = 0; i < tokens.length; i++) {
+    yield tokens[i]!;
+  }
+
+  // Yield stripped unigrams
+  const unigrams = unigramsFromTokens(tokens, normalize);
+  for (let i = 0; i < unigrams.length; i++) {
+    yield unigrams[i]!;
+  }
+
+  // Yield stripped varigrams
+  const varigrams = varigramsFromTokens(tokens, varigramSize, normalize);
+  for (let i = 0; i < varigrams.length; i++) {
+    yield varigrams[i]!;
+  }
+
+  // Yield optional character shingles
+  if (options.shingleSize !== undefined) {
+    const shingles = createShingles(text, options.shingleSize, normalize);
+    for (let i = 0; i < shingles.length; i++) {
+      yield shingles[i]!;
+    }
+  }
+}
+
+// Generate a FingerprintRecord (versioned MinHash fingerprint with creation timestamp) from text.
 export function hash(
   text: string,
   options: HashOptions = {},
@@ -53,12 +86,11 @@ export function hash(
 
   const size = options.size ?? defaultHashOptions.size;
   const varigramSize = options.varigramSize ?? defaultHashOptions.varigramSize;
-  const normalize = options.normalize ?? defaultHashOptions.normalize;
 
   assertValidSize(size);
   assertValidVarigramSize(varigramSize);
 
-  const fingerprint = createFingerprint(text, size, varigramSize, normalize);
+  const fingerprint = createFingerprint(text, options);
 
   return {
     version: HASH_VERSION,
@@ -67,41 +99,45 @@ export function hash(
   };
 }
 
-/**
- * Alias for `hash` to create a FingerprintRecord from text.
- */
+// Alias for `hash` to create a FingerprintRecord from text.
 export const create = hash;
 
-/**
- * Compute the raw `Fingerprint` (`Uint32Array`) MinHash signature directly from text.
- */
+// Compute the raw `Fingerprint` MinHash signature directly from text.
+// Supports either a HashOptions object or positional parameters.
 export function createFingerprint(
   text: string,
-  size: number = defaultHashOptions.size,
-  varigramSize: number = defaultHashOptions.varigramSize,
-  normalize: boolean = defaultHashOptions.normalize,
+  optionsOrSize?: HashOptions | number,
+  varigramSize?: number,
+  normalize?: boolean,
 ): Fingerprint {
   assertValidString(text, "text");
+
+  let options: HashOptions;
+  if (typeof optionsOrSize === "number") {
+    options = {
+      size: optionsOrSize,
+      varigramSize: varigramSize ?? defaultHashOptions.varigramSize,
+      normalize: normalize ?? defaultHashOptions.normalize,
+    };
+  } else {
+    options = optionsOrSize ?? {};
+  }
+
+  const size = options.size ?? defaultHashOptions.size;
+  const vSize = options.varigramSize ?? defaultHashOptions.varigramSize;
+
   assertValidSize(size);
-  assertValidVarigramSize(varigramSize);
+  assertValidVarigramSize(vSize);
 
-  const tokens = createTokens(text, normalize);
-  const unigrams = unigramsFromTokens(tokens, normalize);
-  const varigrams = varigramsFromTokens(tokens, varigramSize, normalize);
-
-  return minHash([...tokens, ...unigrams, ...varigrams], size);
+  return minHash(streamFeatures(text, options), size);
 }
 
-/**
- * Brand a `Uint32Array` as a `Fingerprint`.
- */
+// Brand / wrap a Uint32Array as a Fingerprint instance.
 export function asFingerprint(value: Uint32Array): Fingerprint {
-  return value as Fingerprint;
+  return Fingerprint.fromArray(value);
 }
 
-/**
- * 32-bit FNV-1a hash of a string.
- */
+// 32-bit FNV-1a hash of a string.
 export function hashValue(value: string): number {
   let h = 2166136261;
 
@@ -113,9 +149,7 @@ export function hashValue(value: string): number {
   return h >>> 0;
 }
 
-/**
- * MurmurHash3-style 32-bit finalizer mix of a seed hash and permutation index.
- */
+// MurmurHash3-style 32-bit finalizer mix of a seed hash and permutation index.
 export function mix(seed: number, index: number): number {
   let x = seed ^ Math.imul(index + 1, 0x9e3779b9);
 
@@ -130,30 +164,24 @@ export function mix(seed: number, index: number): number {
   return x >>> 0;
 }
 
-/**
- * Compute a set MinHash `Fingerprint` of length `size` over a collection of token features.
- * Automatically deduplicates item seeds to avoid redundant mix cycles.
- */
+// Compute a set MinHash `Fingerprint` of length `size` over any iterable stream
+// of features (strings or pre-hashed 32-bit numbers).
+// Automatically deduplicates item seeds to avoid redundant mix cycles.
 export function minHash(
-  items: readonly (Token | Unigram | Varigram)[],
-  size: number,
+  items: Iterable<string | number>,
+  size: number = defaultHashOptions.size,
 ): Fingerprint {
   assertValidSize(size);
 
-  const fingerprint = new Uint32Array(size);
+  const fingerprint = new Fingerprint(size);
   fingerprint.fill(0xffffffff);
-
-  if (items.length === 0) {
-    return asFingerprint(fingerprint);
-  }
 
   // Deduplicate seeds: Set MinHash is idempotent, so duplicate seeds produce
   // identical mixes that can never reduce an already-recorded minimum.
   const seenSeeds = new Set<number>();
 
-  for (let j = 0; j < items.length; j++) {
-    const item = items[j]!;
-    const seed = hashValue(item);
+  for (const item of items) {
+    const seed = typeof item === "number" ? (item >>> 0) : hashValue(item);
 
     if (seenSeeds.has(seed)) {
       continue;
@@ -169,5 +197,5 @@ export function minHash(
     }
   }
 
-  return asFingerprint(fingerprint);
+  return fingerprint;
 }
