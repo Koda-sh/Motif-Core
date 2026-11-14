@@ -1,5 +1,5 @@
 {
-  "name": "@kodash/motif-core",
+  "name": "@koda.sh/motif-core",
   "version": "0.1.0",
   "description": "Motif — Content fingerprinting and similarity toolkit",
   "license": "MPL-2.0",
@@ -9,11 +9,31 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "default": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "minhash",
+    "lsh",
+    "fingerprint",
+    "similarity",
+    "jaccard",
+    "containment",
+    "hashing"
+  ],
+  "author": "Koda.sh",
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "dist",
@@ -27,7 +47,8 @@
     "test:watch": "vitest",
     "bench": "vitest bench --run",
     "typecheck": "tsc --noEmit",
-    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\""
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -35,6 +56,7 @@
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.0"
-  }
+  },
+  "prepublishOnly": "npm run typecheck && npm test && npm run build"
 }
 
