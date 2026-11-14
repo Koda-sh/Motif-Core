@@ -1,4 +1,9 @@
-import type { ComparisonResult } from "../types.js";
+import {
+  getBandHashes,
+  getBandKeys,
+  type LshBandOptions,
+} from "../lsh/bands.js";
+import type { ComparisonResult, FingerprintRecord } from "../types.js";
 
 // First-class Fingerprint representation extending native Uint32Array.
 // Provides both native typed array performance and high-level similarity methods.
@@ -20,13 +25,23 @@ export class Fingerprint extends Uint32Array {
 
   // Count the number of identical indices between this and another fingerprint.
   matches(other: Uint32Array): number {
-    return countMatches(this, other);
+    return matches(this, other);
   }
 
   // Estimate containment percentage (0.0 to 1.0) of this fingerprint inside a target superset.
   // Requires the unique feature counts of both documents.
   containment(other: Uint32Array, thisFeatureCount: number, otherFeatureCount: number): number {
     return containment(this, other, thisFeatureCount, otherFeatureCount);
+  }
+
+  // Generate an array of LSH band keys for fast indexing and sub-linear lookup.
+  bandKeys(options?: LshBandOptions): string[] {
+    return getBandKeys(this, options);
+  }
+
+  // Generate raw 32-bit LSH band hashes (zero string allocations).
+  bandHashes(options?: LshBandOptions): Uint32Array {
+    return getBandHashes(this, options);
   }
 
   // Wrap any existing Uint32Array as a Fingerprint without copying.
@@ -48,7 +63,7 @@ function assertMatchingLengths(a: Uint32Array, b: Uint32Array): void {
 }
 
 // Count matching indices between two equal-length fingerprints.
-export function countMatches(a: Uint32Array, b: Uint32Array): number {
+export function matches(a: Uint32Array, b: Uint32Array): number {
   assertMatchingLengths(a, b);
 
   let matchCount = 0;
@@ -68,33 +83,38 @@ export function similarity(a: Uint32Array, b: Uint32Array): number {
     return 1;
   }
 
-  return countMatches(a, b) / a.length;
+  return matches(a, b) / a.length;
 }
 
 // Calculate Hamming distance between two fingerprints.
 export function distance(a: Uint32Array, b: Uint32Array): number {
   assertMatchingLengths(a, b);
-  return a.length - countMatches(a, b);
+  return a.length - matches(a, b);
 }
 
 // Estimate containment of document A in document B using the MinHash Jaccard inversion formula:
 // C(A, B) = (|A ∩ B|) / |A| = (J * (|A| + |B|)) / (|A| * (1 + J))
 export function containment(
-  a: Uint32Array,
-  b: Uint32Array,
-  aFeatureCount: number,
-  bFeatureCount: number,
+  a: Uint32Array | FingerprintRecord,
+  b: Uint32Array | FingerprintRecord,
+  aFeatureCount?: number,
+  bFeatureCount?: number,
 ): number {
-  if (aFeatureCount <= 0) {
+  const fpA = a instanceof Uint32Array ? a : a.fingerprint;
+  const fpB = b instanceof Uint32Array ? b : b.fingerprint;
+  const countA = aFeatureCount ?? (a instanceof Uint32Array ? 0 : a.featureCount);
+  const countB = bFeatureCount ?? (b instanceof Uint32Array ? 0 : b.featureCount);
+
+  if (countA <= 0) {
     return 0;
   }
 
-  const j = similarity(a, b);
+  const j = similarity(fpA, fpB);
   if (j <= 0) {
     return 0;
   }
 
-  const estimated = (j * (aFeatureCount + bFeatureCount)) / (aFeatureCount * (1 + j));
+  const estimated = (j * (countA + countB)) / (countA * (1 + j));
   return Math.min(1, Math.max(0, estimated));
 }
 
@@ -102,7 +122,7 @@ export function containment(
 export function compare(a: Uint32Array, b: Uint32Array): ComparisonResult {
   assertMatchingLengths(a, b);
 
-  const totalMatches = countMatches(a, b);
+  const totalMatches = matches(a, b);
   const size = a.length;
 
   return {
@@ -112,4 +132,3 @@ export function compare(a: Uint32Array, b: Uint32Array): ComparisonResult {
     size,
   };
 }
-

@@ -4,3 +4,4 @@ export * from "./types.js";
 export * from "./fingerprint/index.js";
 export * from "./minhash/index.js";
 export * from "./composite/index.js";
+export * from "./lsh/index.js";

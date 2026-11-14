@@ -16,6 +16,7 @@ export interface FingerprintSignature {
 }
 
 export interface FingerprintRecord extends FingerprintSignature {
+  featureCount: number; // number of unique/extracted features hashed
   createdAt: number; // ms since epoch
 }
 
@@ -60,3 +61,9 @@ export type {
   SlotAggregator,
   SlotAggregatorContext,
 } from "./composite/aggregators.js";
+
+// LSH Band related types
+export type {
+  LshBandOptions,
+  ResolvedBands,
+} from "./lsh/bands.js";

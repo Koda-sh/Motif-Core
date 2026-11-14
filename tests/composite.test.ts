@@ -126,6 +126,13 @@ describe("composite fingerprints", () => {
       expect(receivedWeights).toEqual([10, 1]);
     });
 
+    it("throws RangeError on invalid weights in functional composite()", () => {
+      const fp1 = createFingerprint("apples", { size: 64 });
+      expect(() => composite([[fp1, 0]])).toThrow(RangeError);
+      expect(() => composite([[fp1, -1]])).toThrow(RangeError);
+      expect(() => composite([[fp1, Number.NaN]])).toThrow(RangeError);
+    });
+
     it("throws RangeError on fingerprint size mismatch", () => {
       const fp64 = createFingerprint("short", { size: 64 });
       const fp128 = createFingerprint("long", { size: 128 });
@@ -138,7 +145,6 @@ describe("composite fingerprints", () => {
     it("supports adding, setting, deleting, and clearing entries", () => {
       const comp = new Composite({ create: { size: 64 } });
       expect(comp.size).toBe(0);
-      expect(comp.count).toBe(0);
 
       comp.add("first document");
       comp.set("doc2", "second document", 2);

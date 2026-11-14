@@ -130,6 +130,60 @@ export function powerMean(exponent = 3): SlotAggregator {
     };
   }
 
+  if (exponent === 3) {
+    // Fast-path for cubic mean (avoids Math.pow overhead)
+    return (values, context) => {
+      if (values.length === 0) return 0;
+
+      const weights = context.weights;
+      if (!weights || weights.length !== values.length) {
+        let total = 0;
+        for (let i = 0; i < values.length; i++) {
+          const v = values[i]!;
+          total += v * v * v;
+        }
+        return Math.cbrt(total / values.length);
+      }
+
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i]!;
+        const w = weights[i]!;
+        weightedSum += v * v * v * w;
+        totalWeight += w;
+      }
+      return totalWeight > 0 ? Math.cbrt(weightedSum / totalWeight) : 0;
+    };
+  }
+
+  if (exponent === 2) {
+    // Fast-path for quadratic / RMS mean
+    return (values, context) => {
+      if (values.length === 0) return 0;
+
+      const weights = context.weights;
+      if (!weights || weights.length !== values.length) {
+        let total = 0;
+        for (let i = 0; i < values.length; i++) {
+          const v = values[i]!;
+          total += v * v;
+        }
+        return Math.sqrt(total / values.length);
+      }
+
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i]!;
+        const w = weights[i]!;
+        weightedSum += v * v * w;
+        totalWeight += w;
+      }
+      return totalWeight > 0 ? Math.sqrt(weightedSum / totalWeight) : 0;
+    };
+  }
+
   return (values, context) => {
     if (values.length === 0) {
       return 0;

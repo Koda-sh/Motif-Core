@@ -63,7 +63,9 @@ function assertValidString(value: unknown, paramName = "text"): asserts value is
   }
 }
 
-function resolveStopWords(stopWords?: boolean | Set<string> | readonly string[]): Set<string> | null {
+export function resolveStopWords(
+  stopWords?: boolean | Set<string> | readonly string[],
+): Set<string> | null {
   if (!stopWords) {
     return null;
   }
@@ -77,14 +79,14 @@ function resolveStopWords(stopWords?: boolean | Set<string> | readonly string[])
 }
 
 // Lowercase text and retain only standard ASCII alphanumeric and punctuation characters.
-export function textFilter(text: string): string {
+export function filterText(text: string): string {
   assertValidString(text, "text");
   return text.toLowerCase().replace(FILTER_REGEX, "");
 }
 
 // Lowercase text and strip everything except ASCII alphanumeric characters (`a-z0-9`).
 // Performs a single pass over the string for performance.
-export function textStrip(text: string): string {
+export function stripText(text: string): string {
   assertValidString(text, "text");
   return text.toLowerCase().replace(STRIP_REGEX, "");
 }
@@ -107,12 +109,12 @@ export function createTokens(
 
   let tokens = raw;
   if (normalize) {
-    tokens = tokens.map(textFilter).filter((token) => token.length > 0);
+    tokens = tokens.map(filterText).filter((token) => token.length > 0);
   }
 
   if (stopWordsSet) {
     tokens = tokens.filter((token) => {
-      const stripped = textStrip(token);
+      const stripped = stripText(token);
       return !stopWordsSet.has(stripped);
     });
   }
@@ -154,7 +156,7 @@ export function createShingles(
   assertValidString(text, "text");
   assertValidShingleSize(shingleSize);
 
-  const cleaned = normalize ? textStrip(text) : text;
+  const cleaned = normalize ? stripText(text) : text;
   const count = cleaned.length - shingleSize + 1;
   if (count <= 0) {
     return [];
@@ -206,7 +208,7 @@ export function unigramsFromTokens(
 
   const unigrams: Unigram[] = [];
   for (let i = 0; i < tokens.length; i++) {
-    const stripped = textStrip(tokens[i]!);
+    const stripped = stripText(tokens[i]!);
     if (stripped.length > 0) {
       unigrams.push(stripped);
     }
@@ -240,7 +242,7 @@ export function varigramsFromTokens(
     if (!normalize) {
       varigrams.push(joined);
     } else {
-      const stripped = textStrip(joined);
+      const stripped = stripText(joined);
       if (stripped.length > 0) {
         varigrams.push(stripped);
       }

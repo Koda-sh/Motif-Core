@@ -1,6 +1,6 @@
 import { Fingerprint } from "../fingerprint/fingerprint.js";
 import { createFingerprint, defaultHashOptions } from "../minhash/hash.js";
-import type { ComparisonResult, HashOptions } from "../types.js";
+import type { ComparisonResult, FingerprintRecord, HashOptions } from "../types.js";
 import {
   defaultAggregator,
   normalizeSlot,
@@ -23,8 +23,25 @@ export interface CompositeEntry {
   text?: string;
 }
 
+export type CompositeSource = Fingerprint | FingerprintRecord | string;
+
+function isFingerprintRecord(value: unknown): value is FingerprintRecord {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "fingerprint" in value &&
+    (value as FingerprintRecord).fingerprint instanceof Uint32Array
+  );
+}
+
+function assertValidWeight(weight: number): void {
+  if (!Number.isFinite(weight) || weight <= 0) {
+    throw new RangeError(`Weight must be a positive number, received ${weight}`);
+  }
+}
+
 function resolveFingerprint(
-  source: Fingerprint | string,
+  source: CompositeSource,
   createOptions?: HashOptions,
 ): { fingerprint: Fingerprint; text?: string } {
   if (typeof source === "string") {
@@ -40,12 +57,20 @@ function resolveFingerprint(
     };
   }
 
-  throw new TypeError("Expected source to be a string or Fingerprint (Uint32Array)");
+  if (isFingerprintRecord(source)) {
+    return {
+      fingerprint: Fingerprint.fromArray(source.fingerprint),
+    };
+  }
+
+  throw new TypeError(
+    "Expected source to be a string, Fingerprint, or FingerprintRecord",
+  );
 }
 
-// Build a single composite Fingerprint from an iterable collection of fingerprints or text samples.
+// Build a single composite Fingerprint from an iterable collection of fingerprints, records, or text samples.
 export function composite(
-  sources: Iterable<Fingerprint | string | [Fingerprint | string, number]>,
+  sources: Iterable<CompositeSource | [CompositeSource, number]>,
   options: CompositeOptions = {},
 ): Fingerprint {
   const aggregator = options.aggregator ?? defaultAggregator;
@@ -56,11 +81,12 @@ export function composite(
 
   for (const item of sources) {
     if (Array.isArray(item) && item.length === 2 && typeof item[1] === "number") {
+      assertValidWeight(item[1]);
       const { fingerprint } = resolveFingerprint(item[0], options.create);
       fingerprints.push(fingerprint);
       weights.push(item[1]);
     } else {
-      const { fingerprint } = resolveFingerprint(item as Fingerprint | string, options.create);
+      const { fingerprint } = resolveFingerprint(item as CompositeSource, options.create);
       fingerprints.push(fingerprint);
       weights.push(1);
     }
@@ -115,19 +141,17 @@ export class Composite {
   }
 
   // Add an item without an explicit key (assigns an internal auto-incrementing ID).
-  add(source: Fingerprint | string, weight = 1): this {
+  add(source: CompositeSource, weight = 1): this {
     const key = `_auto_${this.autoIdCounter++}`;
     return this.set(key, source, weight);
   }
 
   // Set an item under a specific identifier key.
-  set(key: string, source: Fingerprint | string, weight = 1): this {
+  set(key: string, source: CompositeSource, weight = 1): this {
     if (typeof key !== "string" || key.length === 0) {
       throw new TypeError("Expected key to be a non-empty string");
     }
-    if (!Number.isFinite(weight) || weight <= 0) {
-      throw new RangeError(`Weight must be a positive number, received ${weight}`);
-    }
+    assertValidWeight(weight);
 
     const { fingerprint, text } = resolveFingerprint(source, this.options.create);
     this.assertSize(fingerprint);
@@ -140,8 +164,8 @@ export class Composite {
   // Add multiple items in batch (array, iterable, or key-value object).
   addMany(
     sources:
-      | Iterable<Fingerprint | string | [string, Fingerprint | string] | [string, Fingerprint | string, number]>
-      | Record<string, Fingerprint | string>,
+      | Iterable<CompositeSource | [string, CompositeSource] | [string, CompositeSource, number]>
+      | Record<string, CompositeSource>,
   ): this {
     if (sources && typeof (sources as any)[Symbol.iterator] === "function") {
       for (const item of sources as Iterable<any>) {
@@ -177,11 +201,6 @@ export class Composite {
     return deleted;
   }
 
-  // Alias for delete.
-  remove(key: string): boolean {
-    return this.delete(key);
-  }
-
   // Check if a key exists in the collection.
   has(key: string): boolean {
     return this.store.has(key);
@@ -201,11 +220,6 @@ export class Composite {
 
   // Number of stored fingerprint entries.
   get size(): number {
-    return this.store.size;
-  }
-
-  // Alias for size.
-  get count(): number {
     return this.store.size;
   }
 

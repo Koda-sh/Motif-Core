@@ -6,19 +6,19 @@ import {
   VERSION,
   compare,
   containment,
-  create,
+  countFeatures,
   createFingerprint,
   createShingles,
   createTokens,
   createUnigrams,
   createVarigrams,
   distance,
+  filterText,
   hash,
   minHash,
   similarity,
   streamFeatures,
-  textFilter,
-  textStrip,
+  stripText,
   tokenize,
   unigramsFromTokens,
   varigramsFromTokens,
@@ -30,15 +30,15 @@ describe("motif-core", () => {
     expect(HASH_VERSION).toBe(1);
   });
 
-  describe("textFilter and textStrip", () => {
+  describe("filterText and stripText", () => {
     it("filters and strips text", () => {
-      expect(textFilter("Hello, World!🚀")).toBe("hello, world!");
-      expect(textStrip("Hello, World! 🚀")).toBe("helloworld");
+      expect(filterText("Hello, World!🚀")).toBe("hello, world!");
+      expect(stripText("Hello, World! 🚀")).toBe("helloworld");
     });
 
     it("throws TypeError on non-string input", () => {
-      expect(() => textFilter(null as unknown as string)).toThrow(TypeError);
-      expect(() => textStrip(123 as unknown as string)).toThrow(TypeError);
+      expect(() => filterText(null as unknown as string)).toThrow(TypeError);
+      expect(() => stripText(123 as unknown as string)).toThrow(TypeError);
     });
   });
 
@@ -130,12 +130,13 @@ describe("motif-core", () => {
   describe("hash and minHash", () => {
     it("hashes text into a FingerprintRecord with deterministic MinHash fingerprint", () => {
       const recordA = hash("The quick brown fox jumps over the lazy dog");
-      const recordB = create("The quick brown fox jumps over the lazy dog");
+      const recordB = hash("The quick brown fox jumps over the lazy dog");
 
       expect(recordA.version).toBe(1);
       expect(recordA.fingerprint).toBeInstanceOf(Uint32Array);
       expect(recordA.fingerprint).toBeInstanceOf(Fingerprint);
       expect(recordA.fingerprint.length).toBe(128);
+      expect(recordA.featureCount).toBeGreaterThan(0);
       expect(Array.from(recordA.fingerprint)).toEqual(
         Array.from(recordB.fingerprint),
       );
@@ -258,19 +259,25 @@ describe("motif-core", () => {
       expect(distance(fp1, fp2)).toBeGreaterThan(fp1.length * 0.9);
     });
 
-    it("calculates containment correctly using inverted Jaccard", () => {
+    it("calculates containment correctly using FingerprintRecord or feature counts", () => {
       const excerpt = "the quick brown fox jumps over the lazy dog";
       const fullDoc = "in the forest the quick brown fox jumps over the lazy dog while birds fly in the sky and squirrels hide";
 
-      const fpExcerpt = createFingerprint(excerpt, { size: 256 });
-      const fpFull = createFingerprint(fullDoc, { size: 256 });
+      const recExcerpt = hash(excerpt, { size: 256 });
+      const recFull = hash(fullDoc, { size: 256 });
 
-      const excerptFeatures = Array.from(streamFeatures(excerpt)).length;
-      const fullDocFeatures = Array.from(streamFeatures(fullDoc)).length;
+      // Direct FingerprintRecord containment
+      const cRecord = containment(recExcerpt, recFull);
+      expect(cRecord).toBeGreaterThan(0.7);
 
-      const c = containment(fpExcerpt, fpFull, excerptFeatures, fullDocFeatures);
-      // Excerpt is fully contained in fullDoc, so estimated containment should be high (~0.8 to 1.0)
-      expect(c).toBeGreaterThan(0.7);
+      // Explicit countFeatures containment
+      const cExplicit = containment(
+        recExcerpt.fingerprint,
+        recFull.fingerprint,
+        countFeatures(excerpt),
+        countFeatures(fullDoc),
+      );
+      expect(cExplicit).toBe(cRecord);
     });
 
     it("throws RangeError on fingerprint size mismatch during comparison", () => {

@@ -4,10 +4,9 @@ import type {
   HashOptions,
 } from "../types.js";
 import {
-  createShingles,
-  createTokens,
-  unigramsFromTokens,
-  varigramsFromTokens,
+  filterText,
+  resolveStopWords,
+  stripText,
 } from "./tokenizer.js";
 
 export const HASH_VERSION = 1;
@@ -32,6 +31,14 @@ function assertValidVarigramSize(varigramSize: number): void {
   }
 }
 
+function assertValidShingleSize(shingleSize: number): void {
+  if (!Number.isInteger(shingleSize) || shingleSize < 1) {
+    throw new RangeError(
+      `shingleSize must be an integer >= 1, received ${shingleSize}`,
+    );
+  }
+}
+
 function assertValidString(value: unknown, paramName = "text"): asserts value is string {
   if (typeof value !== "string") {
     throw new TypeError(
@@ -41,43 +48,93 @@ function assertValidString(value: unknown, paramName = "text"): asserts value is
 }
 
 // Generate an on-the-fly feature stream (tokens, unigrams, varigrams, shingles) from text
-// without constructing large concatenated arrays in memory.
+// using a single-pass scanner and sliding window with O(1) auxiliary memory.
 export function* streamFeatures(
   text: string,
   options: HashOptions = {},
 ): Generator<string> {
+  assertValidString(text, "text");
+
   const normalize = options.normalize ?? defaultHashOptions.normalize;
   const varigramSize = options.varigramSize ?? defaultHashOptions.varigramSize;
+  assertValidVarigramSize(varigramSize);
 
-  const tokens = createTokens(text, normalize, options.stopWords);
-
-  // Yield filtered word tokens
-  for (let i = 0; i < tokens.length; i++) {
-    yield tokens[i]!;
+  if (options.shingleSize !== undefined) {
+    assertValidShingleSize(options.shingleSize);
   }
 
-  // Yield stripped unigrams
-  const unigrams = unigramsFromTokens(tokens, normalize);
-  for (let i = 0; i < unigrams.length; i++) {
-    yield unigrams[i]!;
-  }
+  const stopWordsSet = resolveStopWords(options.stopWords);
+  const window: string[] = [];
+  const wordRegex = /\S+/g;
+  let match: RegExpExecArray | null;
 
-  // Yield stripped varigrams
-  const varigrams = varigramsFromTokens(tokens, varigramSize, normalize);
-  for (let i = 0; i < varigrams.length; i++) {
-    yield varigrams[i]!;
+  while ((match = wordRegex.exec(text)) !== null) {
+    let token = match[0];
+    if (normalize) {
+      token = filterText(token);
+      if (token.length === 0) {
+        continue;
+      }
+    }
+
+    if (stopWordsSet) {
+      const strippedForStop = stripText(token);
+      if (stopWordsSet.has(strippedForStop)) {
+        continue;
+      }
+    }
+
+    // Yield filtered word token
+    yield token;
+
+    // Yield stripped unigram
+    if (normalize) {
+      const unigram = stripText(token);
+      if (unigram.length > 0) {
+        yield unigram;
+      }
+    }
+
+    // Maintain sliding window for varigrams
+    window.push(token);
+    if (window.length === varigramSize) {
+      const joined = window.join(" ");
+      if (normalize) {
+        const varigram = stripText(joined);
+        if (varigram.length > 0) {
+          yield varigram;
+        }
+      } else {
+        yield joined;
+      }
+      window.shift();
+    }
   }
 
   // Yield optional character shingles
   if (options.shingleSize !== undefined) {
-    const shingles = createShingles(text, options.shingleSize, normalize);
-    for (let i = 0; i < shingles.length; i++) {
-      yield shingles[i]!;
+    const shingleSize = options.shingleSize;
+    const cleaned = normalize ? stripText(text) : text;
+    const count = cleaned.length - shingleSize + 1;
+    for (let i = 0; i < count; i++) {
+      yield cleaned.slice(i, i + shingleSize);
     }
   }
 }
 
-// Generate a FingerprintRecord (versioned MinHash fingerprint with creation timestamp) from text.
+// Count the number of unique feature seeds extracted from text.
+export function countFeatures(
+  text: string,
+  options: HashOptions = {},
+): number {
+  const seen = new Set<number>();
+  for (const feature of streamFeatures(text, options)) {
+    seen.add(hashValue(feature));
+  }
+  return seen.size;
+}
+
+// Generate a FingerprintRecord (versioned MinHash fingerprint with featureCount and timestamp) from text.
 export function hash(
   text: string,
   options: HashOptions = {},
@@ -90,17 +147,18 @@ export function hash(
   assertValidSize(size);
   assertValidVarigramSize(varigramSize);
 
-  const fingerprint = createFingerprint(text, options);
+  const { fingerprint, featureCount } = minHashWithCount(
+    streamFeatures(text, options),
+    size,
+  );
 
   return {
     version: HASH_VERSION,
     fingerprint,
+    featureCount,
     createdAt: Date.now(),
   };
 }
-
-// Alias for `hash` to create a FingerprintRecord from text.
-export const create = hash;
 
 // Compute the raw `Fingerprint` MinHash signature directly from text.
 // Supports either a HashOptions object or positional parameters.
@@ -164,13 +222,10 @@ export function mix(seed: number, index: number): number {
   return x >>> 0;
 }
 
-// Compute a set MinHash `Fingerprint` of length `size` over any iterable stream
-// of features (strings or pre-hashed 32-bit numbers).
-// Automatically deduplicates item seeds to avoid redundant mix cycles.
-export function minHash(
+function minHashWithCount(
   items: Iterable<string | number>,
-  size: number = defaultHashOptions.size,
-): Fingerprint {
+  size: number,
+): { fingerprint: Fingerprint; featureCount: number } {
   assertValidSize(size);
 
   const fingerprint = new Fingerprint(size);
@@ -197,5 +252,18 @@ export function minHash(
     }
   }
 
-  return fingerprint;
+  return {
+    fingerprint,
+    featureCount: seenSeeds.size,
+  };
+}
+
+// Compute a set MinHash `Fingerprint` of length `size` over any iterable stream
+// of features (strings or pre-hashed 32-bit numbers).
+// Automatically deduplicates item seeds to avoid redundant mix cycles.
+export function minHash(
+  items: Iterable<string | number>,
+  size: number = defaultHashOptions.size,
+): Fingerprint {
+  return minHashWithCount(items, size).fingerprint;
 }
